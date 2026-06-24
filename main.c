@@ -385,11 +385,9 @@ static Janet sql_load_extension(int32_t argc, Janet *argv) {
     char *pzErrMsg;
     int status = sqlite3_load_extension(db->handle, zFile, zProc, &pzErrMsg);
     if (status != SQLITE_OK) {
-        size_t n = strlen(pzErrMsg);
-        void *jErrMsg = janet_smalloc(n);
-        memcpy(jErrMsg, pzErrMsg, n);
+        const uint8_t *jErrMsg = janet_cstring(pzErrMsg);
         sqlite3_free(pzErrMsg);
-        janet_panic(jErrMsg);
+        janet_panics(jErrMsg);
     }
     return janet_wrap_string(zFile);
 }
