@@ -292,7 +292,7 @@ static Janet sql_eval(int32_t argc, Janet *argv) {
     if (db->flags & FLAG_CLOSED) janet_panic(MSG_DB_CLOSED);
     const uint8_t *query = janet_getstring(argv, 1);
     if (has_null(query, janet_string_length(query))) {
-        err = "cannot have embedded NULL in sql statememts";
+        err = "cannot have embedded NULL in sql statements";
         goto error;
     }
     JanetArray *rows = janet_array(10);
