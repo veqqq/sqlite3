@@ -327,7 +327,7 @@ static Janet sql_eval_impl(int32_t argc, Janet *argv, CollectMode mode) {
         err = "cannot have embedded NULL in sql statements";
         goto error;
     }
-    JanetArray *rows = (mode == COLLECT_ROWS)    ? janet_array(10) : NULL;
+    JanetArray *rows = (mode == COLLECT_ROWS)  ? janet_array(10) : NULL;
     JanetTable *cols = (mode == COLLECT_TO_DF) ? janet_table(0)  : NULL;
     const char *c = (const char *)query;
 
@@ -481,7 +481,7 @@ static const JanetReg cfuns[] = {
         "Evaluate sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
         "table mapping each column name (a keyword) to an array of that column's values. "
         "Columns are present even when no rows match, so the result is usable directly."
-        "If two result columns share a name the later overwrites the previous"
+        "If two result columns share a name the later overwrites the former."
     },
     {"eval", sql_eval, 
         "(sqlite3/eval db sql [,params])\n\n"
