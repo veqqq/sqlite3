@@ -282,7 +282,7 @@ static const char *execute_collect(sqlite3_stmt *stmt, JanetArray *rows) {
 }
 
 /* Return columns from executing statement */
-static const char *execute_collect_to_df(sqlite3_stmt *stmt, JanetTable *cols) {
+static const char *execute_collect_to_dataframe(sqlite3_stmt *stmt, JanetTable *cols) {
     /* Count number of columns in result */
     int ncol = sqlite3_column_count(stmt);
     int status;
@@ -343,7 +343,7 @@ static Janet sql_eval_impl(int32_t argc, Janet *argv, CollectMode mode) {
             /* Execute current statement and collect results */
             if (stmt) {
                 err = (mode == COLLECT_TO_DF)
-                    ? execute_collect_to_df(stmt, cols)
+                    ? execute_collect_to_dataframe(stmt, cols)
                     : execute_collect(stmt, rows);
                 if (err) goto error;
             }
@@ -380,7 +380,7 @@ static Janet sql_eval(int32_t argc, Janet *argv) {
     return sql_eval_impl(argc, argv, COLLECT_ROWS);
 }
 
-static Janet sql_eval_to_df(int32_t argc, Janet *argv) {
+static Janet sql_eval_to_dataframe(int32_t argc, Janet *argv) {
     return sql_eval_impl(argc, argv, COLLECT_TO_DF);
 }
 
@@ -439,7 +439,7 @@ static JanetMethod conn_methods[] = {
     {"error-code", sql_error_code},
     {"close", sql_close},
     {"eval", sql_eval},
-    {"eval-to-df", sql_eval_to_df},
+    {"eval-to-dataframe", sql_eval_to_dataframe},
     {"last-insert-rowid", sql_last_insert_rowid},
     {"allow-loading-extensions", sql_allow_loading_extensions},
     {"load-extension", sql_load_extension},
@@ -476,8 +476,8 @@ static const JanetReg cfuns[] = {
         "(sqlite3/close db)\n\n"
         "Closes a database. Use this to free a database after use. Returns nil."
     },
-    {"eval-to-df", sql_eval_to_df,
-        "(sqlite3/eval-to-df db sql [,params])\n\n"
+    {"eval-to-dataframe", sql_eval_to_dataframe,
+        "(sqlite3/eval-to-dataframe db sql [,params])\n\n"
         "Evaluate sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
         "table mapping each column name (a keyword) to an array of that column's values. "
         "Columns are present even when no rows match, so the result is usable directly."
