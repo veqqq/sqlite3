@@ -220,6 +220,34 @@ static const char *execute(sqlite3_stmt *stmt) {
     return ret;
 }
 
+/* Convert element/column of current row to Janet value */
+static Janet column_value(sqlite3_stmt *stmt, int i) {
+    switch (sqlite3_column_type(stmt, i)) {
+        case SQLITE_NULL:
+            return janet_wrap_nil();
+        case SQLITE_INTEGER:
+            return janet_wrap_number((double) sqlite3_column_int64(stmt, i));
+        case SQLITE_FLOAT:
+            return janet_wrap_number(sqlite3_column_double(stmt, i));
+        case SQLITE_TEXT:
+            {
+                int nbytes = sqlite3_column_bytes(stmt, i);
+                uint8_t *str = janet_string_begin(nbytes);
+                memcpy(str, sqlite3_column_text(stmt, i), nbytes);
+                return janet_wrap_string(janet_string_end(str));
+            }
+        case SQLITE_BLOB:
+            {
+                int nbytes = sqlite3_column_bytes(stmt, i);
+                JanetBuffer *b = janet_buffer(nbytes);
+                memcpy(b->data, sqlite3_column_blob(stmt, i), nbytes);
+                b->count = nbytes;
+                return janet_wrap_buffer(b);
+            }
+    }
+    return janet_wrap_nil();
+}
+
 /* Execute and return values from prepared statement */
 static const char *execute_collect(sqlite3_stmt *stmt, JanetArray *rows) {
     /* Count number of columns in result */
@@ -239,37 +267,7 @@ static const char *execute_collect(sqlite3_stmt *stmt, JanetArray *rows) {
         if (status == SQLITE_ROW) {
             JanetKV *row = janet_struct_begin(ncol);
             for (int i = 0; i < ncol; i++) {
-                int t = sqlite3_column_type(stmt, i);
-                Janet value;
-                switch (t) {
-                    case SQLITE_NULL:
-                        value = janet_wrap_nil();
-                        break;
-                    case SQLITE_INTEGER:
-                        value = janet_wrap_integer(sqlite3_column_int(stmt, i));
-                        break;
-                    case SQLITE_FLOAT:
-                        value = janet_wrap_number(sqlite3_column_double(stmt, i));
-                        break;
-                    case SQLITE_TEXT:
-                        {
-                            int nbytes = sqlite3_column_bytes(stmt, i);
-                            uint8_t *str = janet_string_begin(nbytes);
-                            memcpy(str, sqlite3_column_text(stmt, i), nbytes);
-                            value = janet_wrap_string(janet_string_end(str));
-                        }
-                        break;
-                    case SQLITE_BLOB:
-                        {
-                            int nbytes = sqlite3_column_bytes(stmt, i);
-                            JanetBuffer *b = janet_buffer(nbytes);
-                            memcpy(b->data, sqlite3_column_blob(stmt, i), nbytes);
-                            b->count = nbytes;
-                            value = janet_wrap_buffer(b);
-                        }
-                        break;
-                }
-                janet_struct_put(row, colnames[i], value);
+                janet_struct_put(row, colnames[i], column_value(stmt, i));
             }
             janet_array_push(rows, janet_wrap_struct(janet_struct_end(row)));
         }
@@ -283,8 +281,42 @@ static const char *execute_collect(sqlite3_stmt *stmt, JanetArray *rows) {
     return ret;
 }
 
-/* Evaluate a string of sql */
-static Janet sql_eval(int32_t argc, Janet *argv) {
+/* Return columns from executing statement */
+static const char *execute_collect_to_dataframe(sqlite3_stmt *stmt, JanetTable *cols) {
+    /* Count number of columns in result */
+    int ncol = sqlite3_column_count(stmt);
+    int status;
+    const char *ret = NULL;
+
+    /* Key one array per column */
+    JanetArray **vecs = janet_smalloc(sizeof(JanetArray *) * ncol);
+    for (int i = 0; i < ncol; i++) {
+        Janet name = janet_ckeywordv(sqlite3_column_name(stmt, i));
+        vecs[i] = janet_array(0);
+        janet_table_put(cols, name, janet_wrap_array(vecs[i]));
+    }
+    do {
+        status = sqlite3_step(stmt);
+        if (status == SQLITE_ROW) {
+            for (int i = 0; i < ncol; i++) {
+                janet_array_push(vecs[i], column_value(stmt, i));
+            }
+        }
+    } while (status == SQLITE_ROW);
+    janet_sfree(vecs);
+    
+    /* Check for errors */
+    if (status != SQLITE_DONE) {
+        sqlite3 *db = sqlite3_db_handle(stmt);
+        ret = sqlite3_errmsg(db);
+    }
+    return ret;
+}
+
+typedef enum { COLLECT_ROWS, COLLECT_TO_DF } CollectMode;
+
+/* Evaluate sql string, collecting the final result to the target shape */
+static Janet sql_eval_impl(int32_t argc, Janet *argv, CollectMode mode) {
     janet_arity(argc, 2, 3);
     const char *err;
     sqlite3_stmt *stmt = NULL, *stmt_next = NULL;
@@ -295,7 +327,8 @@ static Janet sql_eval(int32_t argc, Janet *argv) {
         err = "cannot have embedded NULL in sql statements";
         goto error;
     }
-    JanetArray *rows = janet_array(10);
+    JanetArray *rows = (mode == COLLECT_ROWS)  ? janet_array(10) : NULL;
+    JanetTable *cols = (mode == COLLECT_TO_DF) ? janet_table(0)  : NULL;
     const char *c = (const char *)query;
 
     /* Evaluate all statements in a loop */
@@ -309,7 +342,9 @@ static Janet sql_eval(int32_t argc, Janet *argv) {
         if (NULL == stmt_next) {
             /* Execute current statement and collect results */
             if (stmt) {
-                err = execute_collect(stmt, rows);
+                err = (mode == COLLECT_TO_DF)
+                    ? execute_collect_to_dataframe(stmt, cols)
+                    : execute_collect(stmt, rows);
                 if (err) goto error;
             }
         } else {
@@ -332,13 +367,21 @@ static Janet sql_eval(int32_t argc, Janet *argv) {
     } while (NULL != stmt);
 
     /* Good return path */
-    return janet_wrap_array(rows);
+    return (mode == COLLECT_TO_DF) ? janet_wrap_table(cols) : janet_wrap_array(rows);
 
 error:
     if (stmt) sqlite3_finalize(stmt);
     if (stmt_next) sqlite3_finalize(stmt_next);
     janet_panic(err);
     return janet_wrap_nil();
+}
+
+static Janet sql_eval(int32_t argc, Janet *argv) {
+    return sql_eval_impl(argc, argv, COLLECT_ROWS);
+}
+
+static Janet sql_eval_to_dataframe(int32_t argc, Janet *argv) {
+    return sql_eval_impl(argc, argv, COLLECT_TO_DF);
 }
 
 /* Gets the last inserted row id */
@@ -396,6 +439,7 @@ static JanetMethod conn_methods[] = {
     {"error-code", sql_error_code},
     {"close", sql_close},
     {"eval", sql_eval},
+    {"eval-to-dataframe", sql_eval_to_dataframe},
     {"last-insert-rowid", sql_last_insert_rowid},
     {"allow-loading-extensions", sql_allow_loading_extensions},
     {"load-extension", sql_load_extension},
@@ -431,6 +475,13 @@ static const JanetReg cfuns[] = {
     {"close", sql_close, 
         "(sqlite3/close db)\n\n"
         "Closes a database. Use this to free a database after use. Returns nil."
+    },
+    {"eval-to-dataframe", sql_eval_to_dataframe,
+        "(sqlite3/eval-to-dataframe db sql [,params])\n\n"
+        "Evaluate sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
+        "table mapping each column name (a keyword) to an array of that column's values. "
+        "Columns are present even when no rows match, so the result is usable directly."
+        "If two result columns share a name the later overwrites the former."
     },
     {"eval", sql_eval, 
         "(sqlite3/eval db sql [,params])\n\n"
