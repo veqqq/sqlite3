@@ -545,14 +545,14 @@ static const JanetReg cfuns[] = {
     },
     {"eval-to-dataframe", sql_eval_to_dataframe,
         "(sqlite3/eval-to-dataframe db sql [,params])\n\n"
-        "Evaluates sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
+        "Evaluate sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
         "table mapping each column name (a keyword) to an array of that column's values. "
         "Columns are present even when no rows match, so the result is usable directly."
         "If two result columns share a name the later overwrites the former."
     },
     {"eval", sql_eval, 
         "(sqlite3/eval db sql [,params])\n\n"
-        "Evaluates sql in the context of database db. Multiple sql statements "
+        "Evaluate sql in the context of database db. Multiple sql statements "
         "can be chained together, and optionally parameters maybe passed in. "
         "The optional parameters maybe either an indexed data type (tuple or array), or a dictionary "
         "data type (struct or table). If params is a tuple or array, then sqlite "
@@ -586,11 +586,13 @@ static const JanetReg cfuns[] = {
     },
     {"eval-many", eql_eval_many,
         "(sqlite3/eval-many db sql param-sets)\n\n"
-        "Evaluates an sql statement once per element of param-sets (like map)"
+        "Evaluates an sql statement once per element of param-sets (like map) "
         "only preparing statement once, binding arguments like the params argument of "
         "(sqlite3/eval ...); both indexed and named parameters work. All executions "
         "run inside one transaction unless the connection is already in a transaction, "
-        "and any error rolls it back. The purpose is bulk writes, so it returns nil."
+        "and any error rolls it back. The purpose is bulk writes, so it returns nil.\n\n"
+        "  * (sqlite3/eval-many db \"INSERT INTO tracks VALUES (?, ?, ?);\"\n"
+        "        (map tuple (tracks :title) (tracks :bpm) (tracks :gain_db)))\n"
     },
     {NULL, NULL, NULL}
 };
