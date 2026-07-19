@@ -384,6 +384,72 @@ static Janet sql_eval_to_dataframe(int32_t argc, Janet *argv) {
     return sql_eval_impl(argc, argv, COLLECT_TO_DF);
 }
 
+/* Execute statement repeatedly against parameter set */
+static Janet eql_eval_many(int32_t argc, Janet *argv) {
+    janet_fixarity(argc, 3);
+    const char *err;
+    sqlite3_stmt *stmt = NULL, *stmt_extra = NULL;
+    Db *db = janet_getabstract(argv, 0, &sql_conn_type);
+    if (db->flags & FLAG_CLOSED) janet_panic(MSG_DB_CLOSED);
+    const uint8_t *query = janet_getstring(argv, 1);
+    if (has_null(query, janet_string_length(query))) {
+        janet_panic("cannot have embedded NULL in sql statements");
+    }
+    const Janet *sets;
+    int32_t nsets;
+    if (!janet_indexed_view(argv[2], &sets, &nsets)) {
+        janet_panic("expected array or tuple of parameter sets");
+    }
+
+    const char *c = (const char *)query;
+    if (sqlite3_prepare_v2(db->handle, c, -1, &stmt, &c) != SQLITE_OK) {
+        janet_panic(sqlite3_errmsg(db->handle));
+    }
+    if (NULL == stmt) janet_panic("expected a sql statement");
+    /* Ignore trailing whitespace and comments, err on anything else*/
+    /* (treated like a 2nd statement which won't compile) */
+    if (sqlite3_prepare_v2(db->handle, c, -1, &stmt_extra, &c) != SQLITE_OK) {
+        /* because this executes many things, I think we need to copy the messages in such spots*/
+        err = janet_cstring(sqlite3_errmsg(db->handle));
+        goto error;
+    }
+    if (NULL != stmt_extra) {
+        err = janet_cstring("expected only one sql statement");
+        goto error;
+    }
+
+    /* Wrap in a transaction (if not already in one) */
+    int own_txn = sqlite3_get_autocommit(db->handle);
+    if (own_txn && sqlite3_exec(db->handle, "BEGIN;", NULL, NULL, NULL) != SQLITE_OK) {
+        err = janet_cstring(sqlite3_errmsg(db->handle));
+        goto error;
+    }
+
+    for (int32_t i = 0; i < nsets; i++) {
+        const char *berr = bindmany(stmt, sets[i]);
+        if (berr) { err = janet_cstring(berr); goto rollback; }
+        berr = execute(stmt);
+        if (berr) { err = janet_cstring(berr); goto rollback; }
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+    }
+
+    if (own_txn && sqlite3_exec(db->handle, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) {
+        err = janet_cstring(sqlite3_errmsg(db->handle));
+        goto rollback;
+    }
+    sqlite3_finalize(stmt);
+    return janet_wrap_nil();
+
+rollback:
+    if (own_txn) sqlite3_exec(db->handle, "ROLLBACK;", NULL, NULL, NULL);
+error:
+    if (stmt) sqlite3_finalize(stmt);
+    if (stmt_extra) sqlite3_finalize(stmt_extra);
+    janet_panics(err);
+    return janet_wrap_nil();
+}
+
 /* Gets the last inserted row id */
 static Janet sql_last_insert_rowid(int32_t argc, Janet *argv) {
     janet_fixarity(argc, 1);
@@ -443,6 +509,7 @@ static JanetMethod conn_methods[] = {
     {"last-insert-rowid", sql_last_insert_rowid},
     {"allow-loading-extensions", sql_allow_loading_extensions},
     {"load-extension", sql_load_extension},
+    {"eval-many", eql_eval_many},
     {NULL, NULL}
 };
 
@@ -478,14 +545,14 @@ static const JanetReg cfuns[] = {
     },
     {"eval-to-dataframe", sql_eval_to_dataframe,
         "(sqlite3/eval-to-dataframe db sql [,params])\n\n"
-        "Evaluate sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
+        "Evaluates sql like (sqlite3/eval ...), but return results as columnar dataframe: a "
         "table mapping each column name (a keyword) to an array of that column's values. "
         "Columns are present even when no rows match, so the result is usable directly."
         "If two result columns share a name the later overwrites the former."
     },
     {"eval", sql_eval, 
         "(sqlite3/eval db sql [,params])\n\n"
-        "Evaluate sql in the context of database db. Multiple sql statements "
+        "Evaluates sql in the context of database db. Multiple sql statements "
         "can be chained together, and optionally parameters maybe passed in. "
         "The optional parameters maybe either an indexed data type (tuple or array), or a dictionary "
         "data type (struct or table). If params is a tuple or array, then sqlite "
@@ -516,6 +583,14 @@ static const JanetReg cfuns[] = {
         "Loads the SQLite extension library from library-file-path, optionally specifying "
         "the library-entrypoint. Extension loading must be enabled prior to calling this function. "
         "Returns library-file-path."
+    },
+    {"eval-many", eql_eval_many,
+        "(sqlite3/eval-many db sql param-sets)\n\n"
+        "Evaluates an sql statement once per element of param-sets (like map)"
+        "only preparing statement once, binding arguments like the params argument of "
+        "(sqlite3/eval ...); both indexed and named parameters work. All executions "
+        "run inside one transaction unless the connection is already in a transaction, "
+        "and any error rolls it back. The purpose is bulk writes, so it returns nil."
     },
     {NULL, NULL, NULL}
 };
