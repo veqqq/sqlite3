@@ -91,7 +91,7 @@ nil
 
 ## Dataframe Example
 
-Faster than `eval`, `eval-to-dataframe` returns a dataframe (e.g. `{:name ["Bob" "Janet" "Jack"] :age [25 22 31]}`). For bulk writes, `eval-many` runs a single SQL statement repeatedly, essentially mapping over it's final argument.
+2x faster than `eval` for reads, `eval-to-dataframe` returns a dataframe (e.g. `{:name ["Bob" "Janet" "Jack"] :age [25 22 31]}`). For bulk writes, `eval-many` runs a single SQL statement in a transaction, (4x faster than `eval` with a transaction.)
 
 ```janet
 (sqlite3/eval-many db "INSERT INTO f VALUES (?, ?, ?);"
@@ -107,7 +107,7 @@ Faster than `eval`, `eval-to-dataframe` returns a dataframe (e.g. `{:name ["Bob"
 Here is a cute, self-contained program printing number of files ordered by size (use like `janet a.janet my-dir`):
 
 ```janet
-(import /sqlite3)
+(import sqlite3)
 
 (defn walk-dir
   "Return [path ext size] for every regular file under dir, recursing."
